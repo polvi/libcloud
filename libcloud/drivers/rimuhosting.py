@@ -24,12 +24,10 @@ from copy import copy
 try: import json
 except: import simplejson as json
 
+# Defaults
 API_CONTEXT = '/r'
 API_HOST = 'api.rimuhosting.com'
-
-# Port tuple (http,https). Should be (80,443) for the production API. 
 API_PORT = (80,443)
-# Set to True to use SSL.
 API_SECURE = True
 
 class RimuHostingException(BaseException):
@@ -56,7 +54,6 @@ class RimuHostingResponse(Response):
             js = json.loads(self.body)
             if js[js.keys()[0]]['response_type'] == "ERROR":
                 raise RimuHostingException(js[js.keys()[0]]['human_readable_message'])
-               
             return js[js.keys()[0]]
         except ValueError:
             raise RimuHostingException('Could not parse body: %s' % (self.body))
@@ -93,28 +90,31 @@ class RimuHostingNodeDriver(NodeDriver):
     name = 'RimuHosting'
     connectionCls = RimuHostingConnection
     
-    def __init__(self, key, host=API_HOST, port=API_PORT, api_context=API_CONTEXT, secure=True):
+    def __init__(self, key, host=API_HOST, port=API_PORT, api_context=API_CONTEXT, secure=API_SECURE):
+        # Pass in some extra vars so that
         self.key = key
         self.secure = secure
         self.connection = self.connectionCls(key ,secure)
-	self.connection.host = host
+        self.connection.host = host
         self.connection.api_context = api_context
-	self.connection.port = port
+        self.connection.port = port
         self.connection.driver = self
         self.connection.connect()
 
     def _order_uri(self, node,resource):
         # Returns the order uri with its resourse appended.
-        return "/orders/%s/%s" % (node.id,resource)
+        return "/orders/%s/%s" % (node.slug,resource)
    
     # TODO: Get the node state.
     def _to_node(self, order):
-        return Node(id=order['slug'],
+        n = Node(id=order['order_oid'],
                 name=order['domain_name'],
                 state=NodeState.RUNNING,
-                public_ip=order['allocated_ips']['primary_ip'],
+                public_ip=[order['allocated_ips']['primary_ip']]+order['allocated_ips']['secondary_ips'],
                 private_ip=None,
                 driver=self.connection.driver)
+        n.slug = order['slug']
+        return n
 
     def _to_size(self,plan):
         return NodeSize(id=plan['pricing_plan_code'],
@@ -212,8 +212,7 @@ class RimuHostingNodeDriver(NodeDriver):
         
         if kwargs.has_key('num_ips') and int(kwargs['num_ips']) > 1:
             if not kwargs.has_key('extra_ip_reason'):
-                raise RimuHostingException('Need an reason for having an' \
-                                           ' extra IP')
+                raise RimuHostingException('Need an reason for having an extra IP')
             else:
                 if not data.has_key('ip_request'):
                     data['ip_request'] = {}
@@ -236,5 +235,7 @@ class RimuHostingNodeDriver(NodeDriver):
             data['vps_parameters']['disk_space_2_mb'] = kwargs['disk_space_2_mb']
         
         
-        self.connection.request('/orders/new-vps', method='POST', data=json.dumps({"new-vps":data}))
+        res = self.connection.request('/orders/new-vps', method='POST', data=json.dumps({"new-vps":data})).object
+        return self._to_node(res['about_order'])
+    
         
